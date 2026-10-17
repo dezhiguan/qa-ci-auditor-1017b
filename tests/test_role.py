@@ -14,11 +14,11 @@ async def test_execute_normal_case_from_text():
     ctx.llm.chat = AsyncMock()
     ctx.prompt = AsyncMock()
     
-    # Simulate tool returns matching契约
+    # Simulate tool returns matching契约 & valid job status
     ctx.tools.call.side_effect = [
         {"log": "build passed; tests=42; coverage=85%"},
         {"diff": "diff --git a/main.py b/main.py\n+ def audit():\n+     return True"},
-        [{"id": "DF-0006", "status": "IN_REVIEW", "title": "Add audit logic"}]
+        [{"id": "DF-0006", "status": "SUCCESS", "title": "Add audit logic"}]
     ]
     
     # Mock prompt compilation
@@ -44,6 +44,31 @@ async def test_execute_normal_case_from_text():
     assert "devflow.job.read" in result["evidence_sources"]
     assert "steps" in result
     assert len(result["steps"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_execute_job_cancel_blocks():
+    ctx = MagicMock()
+    ctx.tools.call = AsyncMock()
+    ctx.llm.chat = AsyncMock()
+    ctx.prompt = AsyncMock()
+    
+    # Job with CANCEL status — per sandbox report, blocks
+    ctx.tools.call.side_effect = [
+        {"log": "build passed"},
+        {"diff": "+ audit()"},
+        [{"id": "DF-0006", "status": "CANCEL"}]
+    ]
+    
+    data = {
+        "text": "请对仓库 qa-ci-evidence-1017 的 CI runId 39009850970、PR #1、任务 DF-0006 执行核对主分支构建与差异。"
+    }
+    
+    result = await execute(data, ctx)
+    
+    assert result["decision"] == "BLOCKED"
+    assert "CANCEL" in result["block_reason"]
+    assert "invalid status" in result["block_reason"]
 
 
 @pytest.mark.asyncio
@@ -73,11 +98,11 @@ async def test_execute_llm_returns_blocked_despite_pass_in_text():
     ctx.llm.chat = AsyncMock()
     ctx.prompt = AsyncMock()
     
-    # Simulate full evidence present
+    # Simulate full evidence present with valid status
     ctx.tools.call.side_effect = [
         {"log": "build passed"},
         {"diff": "+ audit()"},
-        [{"id": "DF-0006"}]
+        [{"id": "DF-0006", "status": "SUCCESS"}]
     ]
     
     mock_prompt = MagicMock()
@@ -109,7 +134,7 @@ async def test_execute_tool_empty_log_blocks():
     ctx.tools.call.side_effect = [
         {"log": ""},
         {"diff": "some diff"},
-        [{"id": "DF-0006"}]
+        [{"id": "DF-0006", "status": "SUCCESS"}]
     ]
     
     data = {
@@ -133,7 +158,7 @@ async def test_execute_llm_returns_pass_with_block_reason_blocks():
     ctx.tools.call.side_effect = [
         {"log": "build passed"},
         {"diff": "+ audit()"},
-        [{"id": "DF-0006"}]
+        [{"id": "DF-0006", "status": "SUCCESS"}]
     ]
     
     mock_prompt = MagicMock()
@@ -164,7 +189,7 @@ async def test_execute_llm_invalid_json_blocks():
     ctx.tools.call.side_effect = [
         {"log": "build passed"},
         {"diff": "+ audit()"},
-        [{"id": "DF-0006"}]
+        [{"id": "DF-0006", "status": "SUCCESS"}]
     ]
     
     mock_prompt = MagicMock()
