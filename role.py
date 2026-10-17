@@ -7,21 +7,21 @@ async def execute(data: dict, ctx) -> dict:
     if not isinstance(text, str):
         return _blocked("Input 'text' field missing or not a string.")
 
-    # Extract repo
-    repo_match = re.search(r'(?:仓库|repo(?:sitory)?)[\s：:\-]*([\w\-]+)', text)
+    # Extract repo: support Chinese/English delimiters, non-greedy
+    repo_match = re.search(r'(?:仓库|repo(?:sitory)?)[\s：:\-：\s]*([\w\-]+)', text)
     repo = repo_match.group(1).strip() if repo_match else None
 
-    # Extract runId: digits only, after CI runId / runId / CI # etc.
-    runid_match = re.search(r'(?:CI\s+runId|runId|CI\s+ID|CI\s+#|run\s+#)\s*(\d+)', text)
+    # Extract runId: digits only, after CI runId / runId / CI # etc. — allow Chinese colon、
+    runid_match = re.search(r'(?:CI\s+runId|runId|CI\s+ID|CI\s+#|run\s+#)[\s：:\-：\s]*(\d+)', text)
     runId = runid_match.group(1).strip() if runid_match else None
 
-    # Extract PR number: '#\d+' or 'PR #\d+' or 'PR \d+' — cast to int
-    pr_match = re.search(r'(?:PR\s*#?|pull\s+request)\s*(\d+)', text)
+    # Extract PR number: '#\d+' or 'PR #\d+' or 'PR \d+' or 'pull request \d+' — cast to int
+    pr_match = re.search(r'(?:PR\s*#?|pull\s+request)[\s：:\-：\s]*(\d+)', text)
     pr_number_str = pr_match.group(1).strip() if pr_match else None
     number = int(pr_number_str) if pr_number_str and pr_number_str.isdigit() else None
 
-    # Extract jobId: DF-\d+ pattern, case-insensitive, with optional prefix
-    job_match = re.search(r'(?:jobId|task|job|研发任务号|任务号)[\s：:\-]*([A-Z]{2}-\d+)', text, re.IGNORECASE)
+    # Extract jobId: DF-\d+ pattern, case-insensitive, with optional prefix & Chinese delimiters
+    job_match = re.search(r'(?:jobId|task|job|研发任务号|任务号)[\s：:\-：\s]*([A-Z]{2}-\d+)', text, re.IGNORECASE)
     jobId = job_match.group(1).strip() if job_match else None
 
     # Fallback: bare DF-\d+ *only if no other jobId found and exactly one match*
@@ -77,17 +77,21 @@ async def execute(data: dict, ctx) -> dict:
     if len(job_result) == 0:
         return _blocked(f"No devflow job found for jobId={jobId}.")
 
-    # Validate job status: only non-canceled, terminal success states allowed (per sandbox report)
-    valid_job_statuses = {"SUCCESS", "DONE", "COMPLETED"}
-    invalid_job_statuses = {"CANCEL", "CANCELED", "FAILED", "ABORTED", "UNKNOWN"}
-    for job in job_result:
-        status = job.get("status", "").upper().strip()
-        if status in invalid_job_statuses:
-            return _blocked(f"Job record contains invalid status '{status}'. Only {list(valid_job_statuses)} are acceptable.")
-        if status not in valid_job_statuses:
-            # Allow non-terminal but active statuses only if explicitly permitted — default to strict
-            # Per H2 PASS cases & sandbox, CANCEL is fatal; assume any non-whitelisted status blocks
-            return _blocked(f"Job record status '{status}' is unrecognized. Must be one of {list(valid_job_statuses)}.")
+    # ✅ Fix: CANCEL/FAILED/UNKNOWN are *valid audit evidence*, per H1 clarification.
+    # Do NOT block on them — they are real states to report in summary.
+    # Only block on missing status, malformed status, or UNKNOWN *as status value* (not record absence).
+    for i, job in enumerate(job_result):
+        status = job.get("status")
+        if status is None:
+            return _blocked(f"Job record #{i+1} missing 'status' field.")
+        if not isinstance(status, str):
+            return _blocked(f"Job record #{i+1} 'status' is not a string: {type(status).__name__}.")
+        # Trim & normalize; allow case-insensitive matching but preserve original for reporting
+        status_clean = status.strip().upper()
+        # Per H1: CANCEL/FAILED/ABORTED/DONE/SUCCESS/COMPLETED/UNKNOWN are all valid evidence.
+        # Only reject if status is truly undefined (e.g., empty, whitespace-only, null-equivalent)
+        if not status_clean:
+            return _blocked(f"Job record #{i+1} has empty or whitespace-only 'status'.")
 
     # Assemble evidence for prompt (truncated)
     evidence = {

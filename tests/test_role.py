@@ -47,17 +47,48 @@ async def test_execute_normal_case_from_text():
 
 
 @pytest.mark.asyncio
-async def test_execute_job_cancel_blocks():
+async def test_execute_job_cancel_is_valid_evidence():
     ctx = MagicMock()
     ctx.tools.call = AsyncMock()
     ctx.llm.chat = AsyncMock()
     ctx.prompt = AsyncMock()
     
-    # Job with CANCEL status — per sandbox report, blocks
+    # Job with CANCEL status — now valid evidence per H1 clarification
     ctx.tools.call.side_effect = [
         {"log": "build passed"},
         {"diff": "+ audit()"},
-        [{"id": "DF-0006", "status": "CANCEL"}]
+        [{"id": "DF-0006", "status": "CANCEL", "reason": "dependency conflict"}]
+    ]
+    
+    mock_prompt = MagicMock()
+    mock_prompt.compile = MagicMock(return_value="compiled prompt")
+    ctx.prompt.return_value = mock_prompt
+    
+    # LLM returns PASS — should succeed (CANCEL is valid evidence to audit)
+    ctx.llm.chat.return_value = '{"decision": "PASS", "diff_summary": "PR cancels task due to dependency conflict"}'
+    
+    data = {
+        "text": "请对仓库 qa-ci-evidence-1017 的 CI runId 39009850970、PR #1、任务 DF-0006 执行核对主分支构建与差异。"
+    }
+    
+    result = await execute(data, ctx)
+    
+    assert result["decision"] == "PASS"
+    assert "cancels task" in result["diff_summary"]
+
+
+@pytest.mark.asyncio
+async def test_execute_job_status_empty_blocks():
+    ctx = MagicMock()
+    ctx.tools.call = AsyncMock()
+    ctx.llm.chat = AsyncMock()
+    ctx.prompt = AsyncMock()
+    
+    # Job with empty status string — blocks
+    ctx.tools.call.side_effect = [
+        {"log": "build passed"},
+        {"diff": "+ audit()"},
+        [{"id": "DF-0006", "status": ""}]
     ]
     
     data = {
@@ -67,8 +98,7 @@ async def test_execute_job_cancel_blocks():
     result = await execute(data, ctx)
     
     assert result["decision"] == "BLOCKED"
-    assert "CANCEL" in result["block_reason"]
-    assert "invalid status" in result["block_reason"]
+    assert "empty or whitespace-only 'status'" in result["block_reason"]
 
 
 @pytest.mark.asyncio
@@ -98,11 +128,11 @@ async def test_execute_llm_returns_blocked_despite_pass_in_text():
     ctx.llm.chat = AsyncMock()
     ctx.prompt = AsyncMock()
     
-    # Simulate full evidence present with valid status
+    # Simulate full evidence present
     ctx.tools.call.side_effect = [
         {"log": "build passed"},
         {"diff": "+ audit()"},
-        [{"id": "DF-0006", "status": "SUCCESS"}]
+        [{"id": "DF-0006", "status": "FAILED"}]
     ]
     
     mock_prompt = MagicMock()
@@ -158,7 +188,7 @@ async def test_execute_llm_returns_pass_with_block_reason_blocks():
     ctx.tools.call.side_effect = [
         {"log": "build passed"},
         {"diff": "+ audit()"},
-        [{"id": "DF-0006", "status": "SUCCESS"}]
+        [{"id": "DF-0006", "status": "UNKNOWN"}]
     ]
     
     mock_prompt = MagicMock()
@@ -189,7 +219,7 @@ async def test_execute_llm_invalid_json_blocks():
     ctx.tools.call.side_effect = [
         {"log": "build passed"},
         {"diff": "+ audit()"},
-        [{"id": "DF-0006", "status": "SUCCESS"}]
+        [{"id": "DF-0006", "status": "DONE"}]
     ]
     
     mock_prompt = MagicMock()
