@@ -77,8 +77,9 @@ async def execute(data: dict, ctx) -> dict:
     if len(job_result) == 0:
         return _blocked(f"No devflow job found for jobId={jobId}.")
 
-    # ✅ Fix: CANCEL/FAILED/ABORTED/DONE/SUCCESS/COMPLETED are valid audit evidence.
-    # `UNKNOWN` is explicitly INVALID per latest H1 clarification: it indicates indeterminate state → BLOCKED.
+    # ✅ Valid audit statuses per H1 clarification: CANCEL, FAILED, ABORTED, DONE, SUCCESS, COMPLETED
+    # Invalid: UNKNOWN, PENDING, QUEUED, RUNNING, and any other non-determinate status
+    valid_statuses = {"CANCEL", "FAILED", "ABORTED", "DONE", "SUCCESS", "COMPLETED"}
     for i, job in enumerate(job_result):
         status = job.get("status")
         if status is None:
@@ -88,8 +89,8 @@ async def execute(data: dict, ctx) -> dict:
         status_clean = status.strip().upper()
         if not status_clean:
             return _blocked(f"Job record #{i+1} has empty or whitespace-only 'status'.")
-        if status_clean == "UNKNOWN":
-            return _blocked(f"Job record #{i+1} has invalid status 'UNKNOWN'; audit requires determinate evidence.")
+        if status_clean not in valid_statuses:
+            return _blocked(f"Job record #{i+1} has invalid status '{status}' (cleaned: '{status_clean}'); only {sorted(valid_statuses)} are valid audit evidence.")
 
     # Assemble evidence for prompt (truncated)
     evidence = {
