@@ -239,11 +239,11 @@ async def test_execute_llm_returns_pass_with_block_reason_blocks():
     ctx.llm.chat = AsyncMock()
     ctx.prompt = AsyncMock()
     
-    # Simulate full evidence present
+    # Simulate full evidence present — with VALID status (not UNKNOWN) to reach LLM path
     ctx.tools.call.side_effect = [
         {"log": "build passed"},
         {"diff": "+ audit()"},
-        [{"id": "DF-0006", "status": "UNKNOWN"}]
+        [{"id": "DF-0006", "status": "SUCCESS"}]
     ]
     
     mock_prompt = MagicMock()

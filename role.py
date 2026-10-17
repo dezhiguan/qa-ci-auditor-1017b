@@ -137,7 +137,8 @@ async def execute(data: dict, ctx) -> dict:
             "block_reason": block_reason or "LLM explicitly decided BLOCKED."
         }
 
-    # For PASS: block_reason must be absent/empty
+    # For PASS: block_reason must be absent/empty — AND all tool evidence must have passed prior validation (including no UNKNOWN)
+    # So we only reach here if all pre-LLM checks passed (log/diff/job non-empty & status != UNKNOWN)
     diff_summary = parsed.get("diff_summary", "").strip()
     block_reason = parsed.get("block_reason", "").strip()
     if block_reason:
