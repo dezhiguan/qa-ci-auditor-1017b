@@ -182,25 +182,34 @@ async def execute(data: dict, ctx) -> dict:
     
     # Enforce hard BLOCKED semantics: if model says BLOCKED, it blocks — no override
     if decision == "BLOCKED":
-        # Extract block_reason if present
+        # Extract block_reason and diff_summary *if present*, but do NOT require them
         block_reason = ""
         reason_match = re.search(r'"block_reason"\s*:\s*"((?:[^"\\]|\\.)*)"', llm_output)
         if reason_match:
             block_reason = reason_match.group(1).replace('\\n', '\n').replace('\\"', '"')
+        
+        diff_summary = ""
+        diff_match = re.search(r'"diff_summary"\s*:\s*"((?:[^"\\]|\\.)*)"', llm_output)
+        if diff_match:
+            diff_summary = diff_match.group(1).replace('\\n', '\n').replace('\\"', '"')
+        
         return {
             "decision": "BLOCKED",
             "evidence_sources": ["ci.log.fetch", "git.pr.diff", "devflow.job.read"],
             "delegate_results": [],
             "steps": ["validated_ci_log", "validated_pr_diff", "validated_job_record"],
-            "diff_summary": "",
+            "diff_summary": diff_summary,
             "block_reason": block_reason or "LLM explicitly decided BLOCKED."
         }
     
-    # For PASS: extract diff_summary only (block_reason must be empty)
+    # For PASS: extract diff_summary (required in output per prompts/role.md), block_reason must be empty
     diff_summary = ""
     diff_match = re.search(r'"diff_summary"\s*:\s*"((?:[^"\\]|\\.)*)"', llm_output)
     if diff_match:
         diff_summary = diff_match.group(1).replace('\\n', '\n').replace('\\"', '"')
+    
+    # Ensure block_reason is empty for PASS
+    block_reason = ""
     
     return {
         "decision": "PASS",
@@ -208,5 +217,5 @@ async def execute(data: dict, ctx) -> dict:
         "delegate_results": [],
         "steps": ["validated_ci_log", "validated_pr_diff", "validated_job_record"],
         "diff_summary": diff_summary or "No diff summary provided by LLM.",
-        "block_reason": ""
+        "block_reason": block_reason
     }

@@ -26,7 +26,7 @@ async def test_execute_normal_case():
     mock_prompt.compile = MagicMock(return_value="compiled prompt")
     ctx.prompt.return_value = mock_prompt
     
-    # Mock LLM response with PASS
+    # Mock LLM response with PASS and diff_summary
     ctx.llm.chat.return_value = '{"decision": "PASS", "diff_summary": "Adds audit() function", "block_reason": ""}'
     
     # Input with all required structured fields
