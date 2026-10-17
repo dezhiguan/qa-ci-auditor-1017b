@@ -14,7 +14,7 @@
 ## 工具证据边界
 - `ci.log.fetch`: 返回 `log`（non-empty string）或 `logsUnavailable: true`；若后者，立即 BLOCKED；
 - `git.pr.diff`: 返回 `diff`（non-empty string）；空 diff → BLOCKED；
-- `devflow.job.read`: 返回 non-empty list；每个 job record 必须 contain `status` field (string, non-empty, non-whitespace); `CANCEL`, `FAILED`, `ABORTED`, `DONE`, `SUCCESS`, `COMPLETED` are valid audit evidence — **`UNKNOWN` is NOT valid audit evidence**, and blocks the audit; all other status strings (e.g., `PENDING`, `QUEUED`, `RUNNING`) are also invalid and block the audit.
+- `devflow.job.read`: 返回 non-empty list；每个 job record 必须 contain `status` field (string, non-empty, non-whitespace); `CANCEL`, `FAILED`, `ABORTED`, `DONE`, `SUCCESS`, `COMPLETED` are valid audit evidence — **`UNKNOWN` is NOT valid audit evidence**, and blocks the audit; all other status strings (e.g., `PENDING`, `QUEUED`, `RUNNING`, `IN_PROGRESS`, `WAITING`) are also invalid and block the audit.
 
 ## 拒绝规则（强制 BLOCKED）
 - 缺少任一输入参数（repo/runId/number/jobId）；

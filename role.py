@@ -78,7 +78,7 @@ async def execute(data: dict, ctx) -> dict:
         return _blocked(f"No devflow job found for jobId={jobId}.")
 
     # ✅ Valid audit statuses per H1 clarification: CANCEL, FAILED, ABORTED, DONE, SUCCESS, COMPLETED
-    # Invalid: UNKNOWN, PENDING, QUEUED, RUNNING, and any other non-determinate status
+    # Invalid: UNKNOWN, PENDING, QUEUED, RUNNING, IN_PROGRESS, WAITING, and any other non-determinate status
     valid_statuses = {"CANCEL", "FAILED", "ABORTED", "DONE", "SUCCESS", "COMPLETED"}
     for i, job in enumerate(job_result):
         status = job.get("status")
@@ -106,10 +106,11 @@ async def execute(data: dict, ctx) -> dict:
     except Exception as e:
         return _blocked(f"Prompt compilation failed: {str(e)}")
 
-    # LLM call
+    # LLM call: system = compiled role prompt, user = raw input + evidence JSON
     try:
         llm_output = await ctx.llm.chat([
-            {"role": "user", "content": compiled}
+            {"role": "system", "content": compiled},
+            {"role": "user", "content": json.dumps({"input": text, "evidence": evidence}, ensure_ascii=False)}
         ], prompt=prompt)
     except Exception as e:
         return _blocked(f"LLM inference failed: {str(e)}")
