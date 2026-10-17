@@ -100,7 +100,7 @@ async def execute(data: dict, ctx) -> dict:
             "block_reason": "CI logs explicitly unavailable."
         }
     
-    if not isinstance(log_result.get("log"), str) or not log_result["log"].strip():
+    if not isinstance(log_result.get("log"), str) or not log_result.get("log", "").strip():
         return {
             "decision": "BLOCKED",
             "evidence_sources": ["ci.log.fetch"],
@@ -110,7 +110,7 @@ async def execute(data: dict, ctx) -> dict:
             "block_reason": "CI log content missing or empty."
         }
     
-    if not isinstance(diff_result.get("diff"), str) or not diff_result["diff"].strip():
+    if not isinstance(diff_result.get("diff"), str) or not diff_result.get("diff", "").strip():
         return {
             "decision": "BLOCKED",
             "evidence_sources": ["git.pr.diff"],

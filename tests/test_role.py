@@ -34,8 +34,7 @@ async def test_execute_normal_case():
         "repo": "qa-ci-evidence-1017",
         "runId": "39009850970",
         "number": "1",
-        "jobId": "DF-0006",
-        "text": "请对仓库 qa-ci-evidence-1017 的 CI runId 39009850970、PR #1、任务 DF-0006 执行核对。"
+        "jobId": "DF-0006"
     }
     
     result = await execute(data, ctx)
