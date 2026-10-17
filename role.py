@@ -180,31 +180,28 @@ async def execute(data: dict, ctx) -> dict:
     
     decision = decision_match.group(1)
     
-    # Extract diff_summary and block_reason if present
-    diff_summary = ""
-    block_reason = ""
-    
-    diff_match = re.search(r'"diff_summary"\s*:\s*"((?:[^"\\]|\\.)*)"', llm_output)
-    if diff_match:
-        # Unescape newlines and quotes
-        diff_summary = diff_match.group(1).replace('\\n', '\n').replace('\\"', '"')
-    
-    reason_match = re.search(r'"block_reason"\s*:\s*"((?:[^"\\]|\\.)*)"', llm_output)
-    if reason_match:
-        block_reason = reason_match.group(1).replace('\\n', '\n').replace('\\"', '"')
-    
     # Enforce hard BLOCKED semantics: if model says BLOCKED, it blocks — no override
     if decision == "BLOCKED":
+        # Extract block_reason if present
+        block_reason = ""
+        reason_match = re.search(r'"block_reason"\s*:\s*"((?:[^"\\]|\\.)*)"', llm_output)
+        if reason_match:
+            block_reason = reason_match.group(1).replace('\\n', '\n').replace('\\"', '"')
         return {
             "decision": "BLOCKED",
             "evidence_sources": ["ci.log.fetch", "git.pr.diff", "devflow.job.read"],
             "delegate_results": [],
             "steps": ["validated_ci_log", "validated_pr_diff", "validated_job_record"],
-            "diff_summary": diff_summary,
+            "diff_summary": "",
             "block_reason": block_reason or "LLM explicitly decided BLOCKED."
         }
     
-    # For PASS: confirm at least two tools were called successfully (per requirement)
+    # For PASS: extract diff_summary only (block_reason must be empty)
+    diff_summary = ""
+    diff_match = re.search(r'"diff_summary"\s*:\s*"((?:[^"\\]|\\.)*)"', llm_output)
+    if diff_match:
+        diff_summary = diff_match.group(1).replace('\\n', '\n').replace('\\"', '"')
+    
     return {
         "decision": "PASS",
         "evidence_sources": ["ci.log.fetch", "git.pr.diff", "devflow.job.read"],

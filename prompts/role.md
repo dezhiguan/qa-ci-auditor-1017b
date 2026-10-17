@@ -27,7 +27,7 @@
 {
   "decision": "PASS" | "BLOCKED",
   "diff_summary": "...",
-  "block_reason": "..."  // 仅 BLOCKED 时非空
+  "block_reason": "..."  // 仅 BLOCKED 时 non-empty
 }
 
 ---

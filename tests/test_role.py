@@ -103,7 +103,6 @@ async def test_execute_llm_returns_blocked_despite_pass_in_text():
     
     assert result["decision"] == "BLOCKED"
     assert "CI log missing assertion lines" in result["block_reason"]
-    # Must NOT be overruled by 'PASS' in explanation
     assert result["diff_summary"] == "Diff looks safe"
 
 
