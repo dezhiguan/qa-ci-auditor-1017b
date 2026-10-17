@@ -150,7 +150,7 @@ async def test_execute_llm_returns_pass_with_block_reason_blocks():
     result = await execute(data, ctx)
     
     assert result["decision"] == "BLOCKED"
-    assert "contradicts itself" in result["block_reason"]
+    assert "Model returned PASS but included non-empty block_reason." in result["block_reason"]
 
 
 @pytest.mark.asyncio
