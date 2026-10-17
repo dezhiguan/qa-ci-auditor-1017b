@@ -3,25 +3,20 @@ import re
 from typing import Dict, Any, List, Optional
 
 async def execute(data: dict, ctx) -> dict:
-    # Extract required inputs from user request
-    text = data.get("text", "")
-    
-    # Parse repo, runId, PR number, jobId from input text
-    repo_match = re.search(r"仓库\s+([\w\-]+)", text)
-    runid_match = re.search(r"CI\s+runId\s+(\d+)", text)
-    pr_match = re.search(r"PR\s+#(\d+)", text)
-    jobid_match = re.search(r"任务\s+(DF-\d+)", text)
-    
-    repo = repo_match.group(1) if repo_match else None
-    runId = runid_match.group(1) if runid_match else None
-    number = pr_match.group(1) if pr_match else None
-    jobId = jobid_match.group(1) if jobid_match else None
+    # Extract required inputs — per H1: MUST be explicitly provided by caller, not scraped
+    # Caller guarantees structured presence; if absent, BLOCKED
+    repo = data.get("repo")
+    runId = data.get("runId")
+    number = data.get("number")
+    jobId = data.get("jobId")
     
     # Block if any required field missing
     if not all([repo, runId, number, jobId]):
         return {
             "decision": "BLOCKED",
             "evidence_sources": [],
+            "delegate_results": [],
+            "steps": [],
             "diff_summary": "",
             "block_reason": "Missing required input: repo, runId, PR number, or jobId."
         }
@@ -29,130 +24,156 @@ async def execute(data: dict, ctx) -> dict:
     # Call tools — must use exact kwarg names per契约
     try:
         log_result = await ctx.tools.call("ci.log.fetch", repo=repo, runId=runId)
-    except Exception:
+    except Exception as e:
         return {
             "decision": "BLOCKED",
-            "evidence_sources": [],
+            "evidence_sources": ["ci.log.fetch"],
+            "delegate_results": [],
+            "steps": [],
             "diff_summary": "",
-            "block_reason": f"ci.log.fetch failed for repo={repo}, runId={runId}."
+            "block_reason": f"ci.log.fetch failed for repo={repo}, runId={runId}: {str(e)}"
         }
     
     try:
         diff_result = await ctx.tools.call("git.pr.diff", repo=repo, number=number)
-    except Exception:
+    except Exception as e:
         return {
             "decision": "BLOCKED",
-            "evidence_sources": [],
+            "evidence_sources": ["git.pr.diff"],
+            "delegate_results": [],
+            "steps": [],
             "diff_summary": "",
-            "block_reason": f"git.pr.diff failed for repo={repo}, number={number}."
+            "block_reason": f"git.pr.diff failed for repo={repo}, number={number}: {str(e)}"
         }
     
     try:
         job_result = await ctx.tools.call("devflow.job.read", jobId=jobId)
-    except Exception:
+    except Exception as e:
         return {
             "decision": "BLOCKED",
-            "evidence_sources": [],
+            "evidence_sources": ["devflow.job.read"],
+            "delegate_results": [],
+            "steps": [],
             "diff_summary": "",
-            "block_reason": f"devflow.job.read failed for jobId={jobId}."
+            "block_reason": f"devflow.job.read failed for jobId={jobId}: {str(e)}"
         }
     
     # Validate tool returns per契约
-    if not isinstance(log_result, dict) or ("log" not in log_result and not log_result.get("logsUnavailable", False)):
+    if not isinstance(log_result, dict):
         return {
             "decision": "BLOCKED",
-            "evidence_sources": [],
+            "evidence_sources": ["ci.log.fetch"],
+            "delegate_results": [],
+            "steps": [],
             "diff_summary": "",
-            "block_reason": "ci.log.fetch returned invalid structure: missing 'log' or 'logsUnavailable'."
+            "block_reason": "ci.log.fetch returned non-dict value."
         }
     
-    if not isinstance(diff_result, dict) or "diff" not in diff_result:
+    if not isinstance(diff_result, dict):
         return {
             "decision": "BLOCKED",
-            "evidence_sources": [],
+            "evidence_sources": ["git.pr.diff"],
+            "delegate_results": [],
+            "steps": [],
             "diff_summary": "",
-            "block_reason": "git.pr.diff returned invalid structure: missing 'diff'."
+            "block_reason": "git.pr.diff returned non-dict value."
         }
     
     if not isinstance(job_result, list):
         return {
             "decision": "BLOCKED",
-            "evidence_sources": [],
+            "evidence_sources": ["devflow.job.read"],
+            "delegate_results": [],
+            "steps": [],
             "diff_summary": "",
             "block_reason": "devflow.job.read returned non-list value."
         }
     
-    # Block if any evidence is missing/unavailable
+    # Block if evidence explicitly unavailable or empty per契约
     if log_result.get("logsUnavailable", False):
         return {
             "decision": "BLOCKED",
             "evidence_sources": ["ci.log.fetch"],
+            "delegate_results": [],
+            "steps": [],
             "diff_summary": "",
             "block_reason": "CI logs explicitly unavailable."
         }
     
-    if not log_result.get("log", "").strip():
+    if not isinstance(log_result.get("log"), str) or not log_result["log"].strip():
         return {
             "decision": "BLOCKED",
             "evidence_sources": ["ci.log.fetch"],
+            "delegate_results": [],
+            "steps": [],
             "diff_summary": "",
-            "block_reason": "CI log content empty."
+            "block_reason": "CI log content missing or empty."
         }
     
-    if not diff_result.get("diff", "").strip():
+    if not isinstance(diff_result.get("diff"), str) or not diff_result["diff"].strip():
         return {
             "decision": "BLOCKED",
             "evidence_sources": ["git.pr.diff"],
+            "delegate_results": [],
+            "steps": [],
             "diff_summary": "",
-            "block_reason": "PR diff content empty."
+            "block_reason": "PR diff content missing or empty."
         }
     
     if len(job_result) == 0:
         return {
             "decision": "BLOCKED",
             "evidence_sources": ["devflow.job.read"],
+            "delegate_results": [],
+            "steps": [],
             "diff_summary": "",
-            "block_reason": "No matching devflow job found for jobId=" + jobId + "."
+            "block_reason": f"No devflow job found for jobId={jobId}."
         }
     
-    # Assemble evidence dict for prompt
+    # Assemble evidence dict for prompt (truncated to avoid overflow)
     evidence = {
         "ci_log": log_result["log"][:2000] + "..." if len(log_result["log"]) > 2000 else log_result["log"],
         "pr_diff": diff_result["diff"][:2000] + "..." if len(diff_result["diff"]) > 2000 else diff_result["diff"],
-        "job_records": job_result[:3]  # limit to avoid token explosion
+        "job_records": job_result[:3]
     }
     
     # Load & compile prompt
     try:
         prompt = await ctx.prompt("role")
-        compiled = prompt.compile(input=text, evidence=json.dumps(evidence, ensure_ascii=False))
+        compiled = prompt.compile(input=json.dumps(data, ensure_ascii=False), evidence=json.dumps(evidence, ensure_ascii=False))
     except Exception as e:
         return {
             "decision": "BLOCKED",
             "evidence_sources": ["prompt.compilation"],
+            "delegate_results": [],
+            "steps": [],
             "diff_summary": "",
             "block_reason": f"Prompt compilation failed: {str(e)}"
         }
     
-    # LLM call — MUST pass prompt=prompt per static check
+    # LLM call
     try:
         llm_output = await ctx.llm.chat([
             {"role": "user", "content": compiled}
         ], prompt=prompt)
-    except Exception:
+    except Exception as e:
         return {
             "decision": "BLOCKED",
             "evidence_sources": ["llm.chat"],
+            "delegate_results": [],
+            "steps": [],
             "diff_summary": "",
-            "block_reason": "LLM inference failed."
+            "block_reason": f"LLM inference failed: {str(e)}"
         }
     
-    # Parse decision from LLM output
-    decision_match = re.search(r'"decision":\s*"(PASS|BLOCKED)"', llm_output)
+    # Parse decision from LLM output — strict JSON-like field extraction
+    decision_match = re.search(r'"decision"\s*:\s*"(PASS|BLOCKED)"', llm_output)
     if not decision_match:
         return {
             "decision": "BLOCKED",
             "evidence_sources": ["llm.output.parse"],
+            "delegate_results": [],
+            "steps": [],
             "diff_summary": "",
             "block_reason": "LLM output missing valid decision field."
         }
@@ -163,27 +184,32 @@ async def execute(data: dict, ctx) -> dict:
     diff_summary = ""
     block_reason = ""
     
-    diff_match = re.search(r'"diff_summary":\s*"([^"\\]*(?:\\.[^"\\]*)*)"', llm_output)
+    diff_match = re.search(r'"diff_summary"\s*:\s*"((?:[^"\\]|\\.)*)"', llm_output)
     if diff_match:
-        diff_summary = diff_match.group(1).replace('\\n', '\n')
+        # Unescape newlines and quotes
+        diff_summary = diff_match.group(1).replace('\\n', '\n').replace('\\"', '"')
     
-    reason_match = re.search(r'"block_reason":\s*"([^"\\]*(?:\\.[^"\\]*)*)"', llm_output)
+    reason_match = re.search(r'"block_reason"\s*:\s*"((?:[^"\\]|\\.)*)"', llm_output)
     if reason_match:
-        block_reason = reason_match.group(1).replace('\\n', '\n')
+        block_reason = reason_match.group(1).replace('\\n', '\n').replace('\\"', '"')
     
-    # Always preserve BLOCKED even if explanation contains PASS
+    # Enforce hard BLOCKED semantics: if model says BLOCKED, it blocks — no override
     if decision == "BLOCKED":
         return {
             "decision": "BLOCKED",
             "evidence_sources": ["ci.log.fetch", "git.pr.diff", "devflow.job.read"],
+            "delegate_results": [],
+            "steps": ["validated_ci_log", "validated_pr_diff", "validated_job_record"],
             "diff_summary": diff_summary,
             "block_reason": block_reason or "LLM explicitly decided BLOCKED."
         }
     
-    # For PASS, still validate minimal evidence presence
+    # For PASS: confirm at least two tools were called successfully (per requirement)
     return {
         "decision": "PASS",
         "evidence_sources": ["ci.log.fetch", "git.pr.diff", "devflow.job.read"],
-        "diff_summary": diff_summary or "No significant diff summary provided by LLM.",
+        "delegate_results": [],
+        "steps": ["validated_ci_log", "validated_pr_diff", "validated_job_record"],
+        "diff_summary": diff_summary or "No diff summary provided by LLM.",
         "block_reason": ""
     }

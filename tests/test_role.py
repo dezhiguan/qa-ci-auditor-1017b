@@ -14,7 +14,7 @@ async def test_execute_normal_case():
     ctx.llm.chat = AsyncMock()
     ctx.prompt = AsyncMock()
     
-    # Simulate tool returns
+    # Simulate tool returns matching契约
     ctx.tools.call.side_effect = [
         {"log": "build passed; tests=42; coverage=85%"},
         {"diff": "diff --git a/main.py b/main.py\n+ def audit():\n+     return True"},
@@ -29,9 +29,13 @@ async def test_execute_normal_case():
     # Mock LLM response with PASS
     ctx.llm.chat.return_value = '{"decision": "PASS", "diff_summary": "Adds audit() function", "block_reason": ""}'
     
-    # Input with all required fields
+    # Input with all required structured fields
     data = {
-        "text": "请对仓库 qa-ci-evidence-1017 的 CI runId 39009850970、PR #1、任务 DF-0006 执行核对主分支构建与差异。"
+        "repo": "qa-ci-evidence-1017",
+        "runId": "39009850970",
+        "number": "1",
+        "jobId": "DF-0006",
+        "text": "请对仓库 qa-ci-evidence-1017 的 CI runId 39009850970、PR #1、任务 DF-0006 执行核对。"
     }
     
     result = await execute(data, ctx)
@@ -42,6 +46,8 @@ async def test_execute_normal_case():
     assert "ci.log.fetch" in result["evidence_sources"]
     assert "git.pr.diff" in result["evidence_sources"]
     assert "devflow.job.read" in result["evidence_sources"]
+    assert "steps" in result
+    assert len(result["steps"]) == 3
 
 
 @pytest.mark.asyncio
@@ -51,15 +57,19 @@ async def test_execute_missing_input_blocks():
     ctx.llm.chat = AsyncMock()
     ctx.prompt = AsyncMock()
     
-    # Input missing jobId
+    # Input missing jobId — now using structured input
     data = {
-        "text": "请对仓库 qa-ci-evidence-1017 的 CI runId 39009850970、PR #1 执行核对。"
+        "repo": "qa-ci-evidence-1017",
+        "runId": "39009850970",
+        "number": "1"
+        # jobId omitted
     }
     
     result = await execute(data, ctx)
     
     assert result["decision"] == "BLOCKED"
     assert "Missing required input" in result["block_reason"]
+    assert len(result["evidence_sources"]) == 0
 
 
 @pytest.mark.asyncio
@@ -84,7 +94,10 @@ async def test_execute_llm_returns_blocked_despite_pass_in_text():
     ctx.llm.chat.return_value = '{"decision": "BLOCKED", "diff_summary": "Diff looks safe", "block_reason": "CI log missing assertion lines — PASS is insufficient."}'
     
     data = {
-        "text": "请对仓库 qa-ci-evidence-1017 的 CI runId 39009850970、PR #1、任务 DF-0006 执行核对。"
+        "repo": "qa-ci-evidence-1017",
+        "runId": "39009850970",
+        "number": "1",
+        "jobId": "DF-0006"
     }
     
     result = await execute(data, ctx)
@@ -92,3 +105,31 @@ async def test_execute_llm_returns_blocked_despite_pass_in_text():
     assert result["decision"] == "BLOCKED"
     assert "CI log missing assertion lines" in result["block_reason"]
     # Must NOT be overruled by 'PASS' in explanation
+    assert result["diff_summary"] == "Diff looks safe"
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_empty_log_blocks():
+    ctx = MagicMock()
+    ctx.tools.call = AsyncMock()
+    ctx.llm.chat = AsyncMock()
+    ctx.prompt = AsyncMock()
+    
+    # ci.log.fetch returns empty log string
+    ctx.tools.call.side_effect = [
+        {"log": ""},
+        {"diff": "some diff"},
+        [{"id": "DF-0006"}]
+    ]
+    
+    data = {
+        "repo": "qa-ci-evidence-1017",
+        "runId": "39009850970",
+        "number": "1",
+        "jobId": "DF-0006"
+    }
+    
+    result = await execute(data, ctx)
+    
+    assert result["decision"] == "BLOCKED"
+    assert "CI log content missing or empty" in result["block_reason"]
