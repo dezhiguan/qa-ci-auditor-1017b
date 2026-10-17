@@ -102,7 +102,7 @@ async def execute(data: dict, ctx) -> dict:
     # Load & compile prompt
     try:
         prompt = await ctx.prompt("role")
-        compiled = prompt.compile(input=text, evidence=json.dumps(evidence, ensure_ascii=False))
+        compiled = prompt.compile(input=text, evidence="<evidence redacted from system message>")
     except Exception as e:
         return _blocked(f"Prompt compilation failed: {str(e)}")
 
