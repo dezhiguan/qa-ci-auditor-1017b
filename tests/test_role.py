@@ -53,7 +53,7 @@ async def test_execute_job_cancel_is_valid_evidence():
     ctx.llm.chat = AsyncMock()
     ctx.prompt = AsyncMock()
     
-    # Job with CANCEL status — now valid evidence per H1 clarification
+    # Job with CANCEL status — valid evidence per H1 clarification
     ctx.tools.call.side_effect = [
         {"log": "build passed"},
         {"diff": "+ audit()"},
@@ -75,6 +75,61 @@ async def test_execute_job_cancel_is_valid_evidence():
     
     assert result["decision"] == "PASS"
     assert "cancels task" in result["diff_summary"]
+
+
+@pytest.mark.asyncio
+async def test_execute_job_status_unknown_blocks():
+    ctx = MagicMock()
+    ctx.tools.call = AsyncMock()
+    ctx.llm.chat = AsyncMock()
+    ctx.prompt = AsyncMock()
+    
+    # Job with UNKNOWN status — now invalid per latest H1 clarification
+    ctx.tools.call.side_effect = [
+        {"log": "build passed"},
+        {"diff": "+ audit()"},
+        [{"id": "DF-0006", "status": "UNKNOWN"}]
+    ]
+    
+    data = {
+        "text": "请对仓库 qa-ci-evidence-1017 的 CI runId 39009850970、PR #1、任务 DF-0006 执行核对主分支构建与差异。"
+    }
+    
+    result = await execute(data, ctx)
+    
+    assert result["decision"] == "BLOCKED"
+    assert "invalid status 'UNKNOWN'" in result["block_reason"]
+
+
+@pytest.mark.asyncio
+async def test_execute_job_status_unknown_with_llm_pass_still_blocked():
+    ctx = MagicMock()
+    ctx.tools.call = AsyncMock()
+    ctx.llm.chat = AsyncMock()
+    ctx.prompt = AsyncMock()
+    
+    # Job with UNKNOWN status + LLM attempts PASS → must still BLOCK
+    ctx.tools.call.side_effect = [
+        {"log": "build passed"},
+        {"diff": "+ audit()"},
+        [{"id": "DF-0006", "status": "UNKNOWN"}]
+    ]
+    
+    mock_prompt = MagicMock()
+    mock_prompt.compile = MagicMock(return_value="compiled prompt")
+    ctx.prompt.return_value = mock_prompt
+    
+    # LLM returns PASS despite UNKNOWN — final decision must be BLOCKED
+    ctx.llm.chat.return_value = '{"decision": "PASS", "diff_summary": "All looks fine"}'
+    
+    data = {
+        "text": "请对仓库 qa-ci-evidence-1017 的 CI runId 39009850970、PR #1、任务 DF-0006 执行核对主分支构建与差异。"
+    }
+    
+    result = await execute(data, ctx)
+    
+    assert result["decision"] == "BLOCKED"
+    assert "invalid status 'UNKNOWN'" in result["block_reason"]
 
 
 @pytest.mark.asyncio
