@@ -7,7 +7,7 @@ from typing import Dict, Any
 from role import execute
 
 @pytest.mark.asyncio
-async def test_execute_normal_case():
+async def test_execute_normal_case_from_text():
     # Mock context
     ctx = MagicMock()
     ctx.tools.call = AsyncMock()
@@ -29,12 +29,9 @@ async def test_execute_normal_case():
     # Mock LLM response with PASS and diff_summary
     ctx.llm.chat.return_value = '{"decision": "PASS", "diff_summary": "Adds audit() function", "block_reason": ""}'
     
-    # Input with all required structured fields
+    # Input with natural language text — matches H2 PASS cases
     data = {
-        "repo": "qa-ci-evidence-1017",
-        "runId": "39009850970",
-        "number": "1",
-        "jobId": "DF-0006"
+        "text": "请对仓库 qa-ci-evidence-1017 的 CI runId 39009850970、PR #1、任务 DF-0006 执行核对主分支构建与差异，给出可追溯结论。严格按工具返回内容判断；这是证据核验，不代表自动合并或发布。"
     }
     
     result = await execute(data, ctx)
@@ -50,24 +47,22 @@ async def test_execute_normal_case():
 
 
 @pytest.mark.asyncio
-async def test_execute_missing_input_blocks():
+async def test_execute_missing_input_in_text_blocks():
     ctx = MagicMock()
     ctx.tools.call = AsyncMock()
     ctx.llm.chat = AsyncMock()
     ctx.prompt = AsyncMock()
     
-    # Input missing jobId — now using structured input
+    # Input text missing jobId
     data = {
-        "repo": "qa-ci-evidence-1017",
-        "runId": "39009850970",
-        "number": "1"
-        # jobId omitted
+        "text": "请对仓库 qa-ci-evidence-1017 的 CI runId 39009850970、PR #1 执行核对主分支构建与差异。"
     }
     
     result = await execute(data, ctx)
     
     assert result["decision"] == "BLOCKED"
     assert "Missing required input" in result["block_reason"]
+    assert "jobId" in result["block_reason"]
     assert len(result["evidence_sources"]) == 0
 
 
@@ -93,10 +88,7 @@ async def test_execute_llm_returns_blocked_despite_pass_in_text():
     ctx.llm.chat.return_value = '{"decision": "BLOCKED", "diff_summary": "Diff looks safe", "block_reason": "CI log missing assertion lines — PASS is insufficient."}'
     
     data = {
-        "repo": "qa-ci-evidence-1017",
-        "runId": "39009850970",
-        "number": "1",
-        "jobId": "DF-0006"
+        "text": "请对仓库 qa-ci-evidence-1017 的 CI runId 39009850970、PR #1、任务 DF-0006 执行核对主分支构建与差异。"
     }
     
     result = await execute(data, ctx)
@@ -121,10 +113,7 @@ async def test_execute_tool_empty_log_blocks():
     ]
     
     data = {
-        "repo": "qa-ci-evidence-1017",
-        "runId": "39009850970",
-        "number": "1",
-        "jobId": "DF-0006"
+        "text": "请对仓库 qa-ci-evidence-1017 的 CI runId 39009850970、PR #1、任务 DF-0006 执行核对主分支构建与差异。"
     }
     
     result = await execute(data, ctx)
