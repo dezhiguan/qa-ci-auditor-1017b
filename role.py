@@ -4,7 +4,6 @@ from typing import Dict, Any, List, Optional
 
 async def execute(data: dict, ctx) -> dict:
     # H2 PASS cases show input is {"text": "natural language..."}
-    # Extract repo, runId, number (PR #N), jobId from data.text using explicit regex patterns
     text = data.get("text", "")
     if not isinstance(text, str):
         return {
@@ -16,34 +15,49 @@ async def execute(data: dict, ctx) -> dict:
             "block_reason": "Input 'text' field missing or not a string."
         }
 
-    # Extract repo: matches '仓库 <slug>' or 'repo=<slug>' or 'repository <slug>'
+    # Extract repo: match '仓库 <slug>', 'repo=<slug>', 'repository <slug>', or standalone keel-agents slug pattern (alphanumeric + dash)
     repo_match = re.search(r'(?:仓库|repo(?:sitory)?)[\s：:\-]*([\w\-]+)', text)
-    repo = repo_match.group(1).strip() if repo_match else None
+    if not repo_match:
+        # Fallback: try to find likely repo slug anywhere (e.g., in URL-like context or as standalone word before slash)
+        # But only accept if it matches keel-agents naming convention and appears near CI/PR/job context
+        candidate_repo = re.search(r'([\w\-]+)(?=\s+(?:CI|runId|PR|job|task|DF-))', text)
+        if candidate_repo and re.fullmatch(r'[\w\-]+', candidate_repo.group(1)):
+            repo = candidate_repo.group(1).strip()
+        else:
+            repo = None
+    else:
+        repo = repo_match.group(1).strip()
 
-    # Extract runId: digits only, after 'CI runId', 'runId', 'CI ID', or '#'
-    runid_match = re.search(r'(?:CI\s+runId|runId|CI\s+ID|CI\s+#|run\s+#)\s*(\d+)', text)
+    # Extract runId: digits only, after 'CI runId', 'runId', 'CI ID', 'CI #', 'run #', or standalone digits after 'run'
+    runid_match = re.search(r'(?:CI\s+runId|runId|CI\s+ID|CI\s+#|run\s+#|run\s+)(\d+)', text)
     runId = runid_match.group(1).strip() if runid_match else None
 
-    # Extract PR number: '#\d+' or 'PR #\d+' or 'PR \d+'
-    pr_match = re.search(r'(?:PR\s*#?|pull\s+request\s*#?)\s*(\d+)', text)
+    # Extract PR number: '#\d+' or 'PR #\d+' or 'PR \d+' or 'pull request \d+'
+    pr_match = re.search(r'(?:PR\s*#?|pull\s+request)\s*(\d+)', text)
     number = pr_match.group(1).strip() if pr_match else None
 
-    # Extract jobId: 'DF-\d+' or 'task DF-\d+' or 'jobId=DF-\d+'
+    # Extract jobId: 'DF-\d+' or 'task DF-\d+' or 'jobId=DF-\d+' or '研发任务号 DF-\d+'
     job_match = re.search(r'(?:jobId|task|job|研发任务号)[\s：:\-]*([A-Z]{2}-\d+)', text)
     jobId = job_match.group(1).strip() if job_match else None
 
-    # Fallback: try bare DF-\d+ anywhere if no jobId yet
+    # Fallback: bare DF-\d+ anywhere — but only if no other jobId found and it's unambiguous
     if not jobId:
         fallback_job = re.search(r'(DF-\d+)', text)
-        jobId = fallback_job.group(1).strip() if fallback_job else None
+        if fallback_job and len(re.findall(r'DF-\d+', text)) == 1:
+            jobId = fallback_job.group(1).strip()
 
     # Block if any required identifier missing
-    if not all([repo, runId, number, jobId]):
-        missing = []
-        if not repo: missing.append("repo")
-        if not runId: missing.append("runId")
-        if not number: missing.append("PR number")
-        if not jobId: missing.append("jobId")
+    missing = []
+    if not repo:
+        missing.append("repo")
+    if not runId:
+        missing.append("runId")
+    if not number:
+        missing.append("PR number")
+    if not jobId:
+        missing.append("jobId")
+    
+    if missing:
         return {
             "decision": "BLOCKED",
             "evidence_sources": [],
@@ -172,7 +186,7 @@ async def execute(data: dict, ctx) -> dict:
     # Load & compile prompt
     try:
         prompt = await ctx.prompt("role")
-        compiled = prompt.compile(input=json.dumps(data, ensure_ascii=False), evidence=json.dumps(evidence, ensure_ascii=False))
+        compiled = prompt.compile(input=text, evidence=json.dumps(evidence, ensure_ascii=False))
     except Exception as e:
         return {
             "decision": "BLOCKED",
@@ -198,33 +212,28 @@ async def execute(data: dict, ctx) -> dict:
             "block_reason": f"LLM inference failed: {str(e)}"
         }
 
-    # Parse decision from LLM output — strict JSON-like field extraction
-    decision_match = re.search(r'"decision"\s*:\s*"(PASS|BLOCKED)"', llm_output)
-    if not decision_match:
+    # Parse decision from LLM output — strict JSON parsing, not regex
+    try:
+        parsed = json.loads(llm_output.strip())
+        if not isinstance(parsed, dict):
+            raise ValueError("LLM output not a JSON object")
+        decision = parsed.get("decision")
+        if decision not in ["PASS", "BLOCKED"]:
+            raise ValueError(f"Invalid decision value: {decision}")
+    except (json.JSONDecodeError, ValueError, TypeError) as e:
         return {
             "decision": "BLOCKED",
             "evidence_sources": ["llm.output.parse"],
             "delegate_results": [],
             "steps": [],
             "diff_summary": "",
-            "block_reason": "LLM output missing valid decision field."
+            "block_reason": f"LLM output invalid JSON or missing/invalid decision field: {str(e)}"
         }
-
-    decision = decision_match.group(1)
 
     # Enforce hard BLOCKED semantics: if model says BLOCKED, it blocks — no override
     if decision == "BLOCKED":
-        # Extract block_reason and diff_summary *if present*
-        block_reason = ""
-        reason_match = re.search(r'"block_reason"\s*:\s*"((?:[^"\\]|\\.)*)"', llm_output)
-        if reason_match:
-            block_reason = reason_match.group(1).replace('\\n', '\n').replace('\\"', '"')
-
-        diff_summary = ""
-        diff_match = re.search(r'"diff_summary"\s*:\s*"((?:[^"\\]|\\.)*)"', llm_output)
-        if diff_match:
-            diff_summary = diff_match.group(1).replace('\\n', '\n').replace('\\"', '"')
-
+        block_reason = parsed.get("block_reason", "").strip()
+        diff_summary = parsed.get("diff_summary", "").strip()
         return {
             "decision": "BLOCKED",
             "evidence_sources": ["ci.log.fetch", "git.pr.diff", "devflow.job.read"],
@@ -234,11 +243,19 @@ async def execute(data: dict, ctx) -> dict:
             "block_reason": block_reason or "LLM explicitly decided BLOCKED."
         }
 
-    # For PASS: extract diff_summary, ensure block_reason is empty
-    diff_summary = ""
-    diff_match = re.search(r'"diff_summary"\s*:\s*"((?:[^"\\]|\\.)*)"', llm_output)
-    if diff_match:
-        diff_summary = diff_match.group(1).replace('\\n', '\n').replace('\\"', '"')
+    # For PASS: extract diff_summary, ensure block_reason is absent/empty
+    diff_summary = parsed.get("diff_summary", "").strip()
+    block_reason = parsed.get("block_reason", "").strip()
+    if block_reason:
+        # Model contradicts itself: claims PASS but provides block_reason → treat as BLOCKED
+        return {
+            "decision": "BLOCKED",
+            "evidence_sources": ["ci.log.fetch", "git.pr.diff", "devflow.job.read"],
+            "delegate_results": [],
+            "steps": ["validated_ci_log", "validated_pr_diff", "validated_job_record"],
+            "diff_summary": diff_summary,
+            "block_reason": "Model returned PASS but included non-empty block_reason."
+        }
 
     return {
         "decision": "PASS",

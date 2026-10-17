@@ -27,7 +27,7 @@ async def test_execute_normal_case_from_text():
     ctx.prompt.return_value = mock_prompt
     
     # Mock LLM response with PASS and diff_summary
-    ctx.llm.chat.return_value = '{"decision": "PASS", "diff_summary": "Adds audit() function", "block_reason": ""}'
+    ctx.llm.chat.return_value = '{"decision": "PASS", "diff_summary": "Adds audit() function"}'
     
     # Input with natural language text — matches H2 PASS cases
     data = {
@@ -84,8 +84,8 @@ async def test_execute_llm_returns_blocked_despite_pass_in_text():
     mock_prompt.compile = MagicMock(return_value="compiled prompt")
     ctx.prompt.return_value = mock_prompt
     
-    # LLM returns BLOCKED but includes 'PASS' in explanation
-    ctx.llm.chat.return_value = '{"decision": "BLOCKED", "diff_summary": "Diff looks safe", "block_reason": "CI log missing assertion lines — PASS is insufficient."}'
+    # LLM returns BLOCKED — final decision must be BLOCKED regardless of explanation
+    ctx.llm.chat.return_value = '{"decision": "BLOCKED", "diff_summary": "Diff looks safe", "block_reason": "CI log missing assertion lines."}'
     
     data = {
         "text": "请对仓库 qa-ci-evidence-1017 的 CI runId 39009850970、PR #1、任务 DF-0006 执行核对主分支构建与差异。"
@@ -120,3 +120,65 @@ async def test_execute_tool_empty_log_blocks():
     
     assert result["decision"] == "BLOCKED"
     assert "CI log content missing or empty" in result["block_reason"]
+
+
+@pytest.mark.asyncio
+async def test_execute_llm_returns_pass_with_block_reason_blocks():
+    ctx = MagicMock()
+    ctx.tools.call = AsyncMock()
+    ctx.llm.chat = AsyncMock()
+    ctx.prompt = AsyncMock()
+    
+    # Simulate full evidence present
+    ctx.tools.call.side_effect = [
+        {"log": "build passed"},
+        {"diff": "+ audit()"},
+        [{"id": "DF-0006"}]
+    ]
+    
+    mock_prompt = MagicMock()
+    mock_prompt.compile = MagicMock(return_value="compiled prompt")
+    ctx.prompt.return_value = mock_prompt
+    
+    # LLM returns PASS but includes block_reason — violates contract
+    ctx.llm.chat.return_value = '{"decision": "PASS", "diff_summary": "Safe change", "block_reason": "Needs manual sign-off"}'
+    
+    data = {
+        "text": "请对仓库 qa-ci-evidence-1017 的 CI runId 39009850970、PR #1、任务 DF-0006 执行核对主分支构建与差异。"
+    }
+    
+    result = await execute(data, ctx)
+    
+    assert result["decision"] == "BLOCKED"
+    assert "contradicts itself" in result["block_reason"]
+
+
+@pytest.mark.asyncio
+async def test_execute_llm_invalid_json_blocks():
+    ctx = MagicMock()
+    ctx.tools.call = AsyncMock()
+    ctx.llm.chat = AsyncMock()
+    ctx.prompt = AsyncMock()
+    
+    # Simulate full evidence present
+    ctx.tools.call.side_effect = [
+        {"log": "build passed"},
+        {"diff": "+ audit()"},
+        [{"id": "DF-0006"}]
+    ]
+    
+    mock_prompt = MagicMock()
+    mock_prompt.compile = MagicMock(return_value="compiled prompt")
+    ctx.prompt.return_value = mock_prompt
+    
+    # LLM returns malformed JSON
+    ctx.llm.chat.return_value = '{"decision": "PASS", "diff_summary": "Safe change"'  # missing closing brace
+    
+    data = {
+        "text": "请对仓库 qa-ci-evidence-1017 的 CI runId 39009850970、PR #1、任务 DF-0006 执行核对主分支构建与差异。"
+    }
+    
+    result = await execute(data, ctx)
+    
+    assert result["decision"] == "BLOCKED"
+    assert "invalid JSON" in result["block_reason"]
