@@ -12,9 +12,9 @@
 - **不得自行查询“最新 run”或解析模糊 PR 引用**；不匹配即阻塞。
 
 ## 工具证据边界
-- `ci.log.fetch`: 返回 `log`（非空字符串）或 `logsUnavailable: true`；若后者，立即 BLOCKED；
-- `git.pr.diff`: 返回 `diff`（非空字符串）；空 diff → BLOCKED；
-- `devflow.job.read`: 返回非空列表；空列表 → BLOCKED。
+- `ci.log.fetch`: 返回 `log`（non-empty string）或 `logsUnavailable: true`；若后者，立即 BLOCKED；
+- `git.pr.diff`: 返回 `diff`（non-empty string）；空 diff → BLOCKED；
+- `devflow.job.read`: 返回 non-empty list；空 list → BLOCKED。
 
 ## 拒绝规则（强制 BLOCKED）
 - 缺少任一输入参数（repo/runId/number/jobId）；

@@ -3,7 +3,6 @@ import re
 from typing import Dict, Any, List, Optional
 
 async def execute(data: dict, ctx) -> dict:
-    # H2 PASS cases show input is {"text": "natural language..."}
     text = data.get("text", "")
     if not isinstance(text, str):
         return {
@@ -15,44 +14,36 @@ async def execute(data: dict, ctx) -> dict:
             "block_reason": "Input 'text' field missing or not a string."
         }
 
-    # Extract repo: match '仓库 <slug>', 'repo=<slug>', 'repository <slug>', or standalone keel-agents slug pattern (alphanumeric + dash)
+    # Extract repo: match '仓库 <slug>', 'repo=<slug>', 'repository <slug>'
     repo_match = re.search(r'(?:仓库|repo(?:sitory)?)[\s：:\-]*([\w\-]+)', text)
-    if not repo_match:
-        # Fallback: try to find likely repo slug anywhere (e.g., in URL-like context or as standalone word before slash)
-        # But only accept if it matches keel-agents naming convention and appears near CI/PR/job context
-        candidate_repo = re.search(r'([\w\-]+)(?=\s+(?:CI|runId|PR|job|task|DF-))', text)
-        if candidate_repo and re.fullmatch(r'[\w\-]+', candidate_repo.group(1)):
-            repo = candidate_repo.group(1).strip()
-        else:
-            repo = None
-    else:
-        repo = repo_match.group(1).strip()
+    repo = repo_match.group(1).strip() if repo_match else None
 
-    # Extract runId: digits only, after 'CI runId', 'runId', 'CI ID', 'CI #', 'run #', or standalone digits after 'run'
-    runid_match = re.search(r'(?:CI\s+runId|runId|CI\s+ID|CI\s+#|run\s+#|run\s+)(\d+)', text)
+    # Extract runId: digits only, after 'CI runId', 'runId', 'CI ID', 'CI #', 'run #'
+    runid_match = re.search(r'(?:CI\s+runId|runId|CI\s+ID|CI\s+#|run\s+#)\s*(\d+)', text)
     runId = runid_match.group(1).strip() if runid_match else None
 
-    # Extract PR number: '#\d+' or 'PR #\d+' or 'PR \d+' or 'pull request \d+'
+    # Extract PR number: '#\d+' or 'PR #\d+' or 'PR \d+' or 'pull request \d+' — cast to int later
     pr_match = re.search(r'(?:PR\s*#?|pull\s+request)\s*(\d+)', text)
-    number = pr_match.group(1).strip() if pr_match else None
+    pr_number_str = pr_match.group(1).strip() if pr_match else None
+    number = int(pr_number_str) if pr_number_str and pr_number_str.isdigit() else None
 
-    # Extract jobId: 'DF-\d+' or 'task DF-\d+' or 'jobId=DF-\d+' or '研发任务号 DF-\d+'
-    job_match = re.search(r'(?:jobId|task|job|研发任务号)[\s：:\-]*([A-Z]{2}-\d+)', text)
+    # Extract jobId: 'DF-\d+' pattern, case-insensitive, with optional prefix
+    job_match = re.search(r'(?:jobId|task|job|研发任务号|任务号)[\s：:\-]*([A-Z]{2}-\d+)', text, re.IGNORECASE)
     jobId = job_match.group(1).strip() if job_match else None
 
-    # Fallback: bare DF-\d+ anywhere — but only if no other jobId found and it's unambiguous
+    # Fallback: bare DF-\d+ *only if no other jobId found and exactly one match*
     if not jobId:
-        fallback_job = re.search(r'(DF-\d+)', text)
-        if fallback_job and len(re.findall(r'DF-\d+', text)) == 1:
-            jobId = fallback_job.group(1).strip()
+        all_df_matches = re.findall(r'DF-\d+', text, re.IGNORECASE)
+        if len(all_df_matches) == 1:
+            jobId = all_df_matches[0].strip()
 
-    # Block if any required identifier missing
+    # Block on any missing required identifier
     missing = []
     if not repo:
         missing.append("repo")
     if not runId:
         missing.append("runId")
-    if not number:
+    if number is None:
         missing.append("PR number")
     if not jobId:
         missing.append("jobId")
@@ -67,7 +58,7 @@ async def execute(data: dict, ctx) -> dict:
             "block_reason": f"Missing required input: {', '.join(missing)}. All must be explicitly stated in input text."
         }
 
-    # Call tools — exact kwarg names per契约
+    # Call tools with exact kwarg names per契约
     try:
         log_result = await ctx.tools.call("ci.log.fetch", repo=repo, runId=runId)
     except Exception as e:
@@ -135,7 +126,7 @@ async def execute(data: dict, ctx) -> dict:
             "block_reason": "devflow.job.read returned non-list value."
         }
 
-    # Block if evidence explicitly unavailable or empty per契约
+    # Enforce evidence presence per契约
     if log_result.get("logsUnavailable", False):
         return {
             "decision": "BLOCKED",
@@ -176,7 +167,7 @@ async def execute(data: dict, ctx) -> dict:
             "block_reason": f"No devflow job found for jobId={jobId}."
         }
 
-    # Assemble evidence dict for prompt (truncated to avoid overflow)
+    # Assemble evidence for prompt (truncated)
     evidence = {
         "ci_log": log_result["log"][:2000] + "..." if len(log_result["log"]) > 2000 else log_result["log"],
         "pr_diff": diff_result["diff"][:2000] + "..." if len(diff_result["diff"]) > 2000 else diff_result["diff"],
@@ -212,7 +203,7 @@ async def execute(data: dict, ctx) -> dict:
             "block_reason": f"LLM inference failed: {str(e)}"
         }
 
-    # Parse decision from LLM output — strict JSON parsing, not regex
+    # Strict JSON parse + decision validation
     try:
         parsed = json.loads(llm_output.strip())
         if not isinstance(parsed, dict):
@@ -230,7 +221,7 @@ async def execute(data: dict, ctx) -> dict:
             "block_reason": f"LLM output invalid JSON or missing/invalid decision field: {str(e)}"
         }
 
-    # Enforce hard BLOCKED semantics: if model says BLOCKED, it blocks — no override
+    # Hard BLOCKED semantics: if model says BLOCKED → final BLOCKED
     if decision == "BLOCKED":
         block_reason = parsed.get("block_reason", "").strip()
         diff_summary = parsed.get("diff_summary", "").strip()
@@ -243,11 +234,10 @@ async def execute(data: dict, ctx) -> dict:
             "block_reason": block_reason or "LLM explicitly decided BLOCKED."
         }
 
-    # For PASS: extract diff_summary, ensure block_reason is absent/empty
+    # For PASS: block_reason must be absent/empty
     diff_summary = parsed.get("diff_summary", "").strip()
     block_reason = parsed.get("block_reason", "").strip()
     if block_reason:
-        # Model contradicts itself: claims PASS but provides block_reason → treat as BLOCKED
         return {
             "decision": "BLOCKED",
             "evidence_sources": ["ci.log.fetch", "git.pr.diff", "devflow.job.read"],
