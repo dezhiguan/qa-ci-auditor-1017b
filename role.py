@@ -99,14 +99,14 @@ async def execute(data: dict, ctx) -> dict:
         "job_records": job_result[:3]
     }
 
-    # Load & compile prompt
+    # Load & compile prompt — ONLY role instructions in system
     try:
         prompt = await ctx.prompt("role")
         compiled = prompt.compile(input=text, evidence="<evidence redacted from system message>")
     except Exception as e:
         return _blocked(f"Prompt compilation failed: {str(e)}")
 
-    # LLM call: system = compiled role prompt, user = raw input + evidence JSON
+    # LLM call: system = compiled role prompt (trusted), user = structured JSON (untrusted input + evidence)
     try:
         llm_output = await ctx.llm.chat([
             {"role": "system", "content": compiled},
